@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    function isValidSize() {
+      // Max 5MB for event posters
+      return request.resource.size < 5 * 1024 * 1024;
+    }
+    
+    function isValidImageType() {
+      return request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+    }
+    
+    // Event Posters Storage
+    match /event-posters/{eventId}/{fileName} {
+      // Anyone can read event posters
+      allow read: if true;
+      
+      // Authenticated users can upload posters for their submissions
+      allow create: if isAuthenticated()
+                    && isValidImageType()
+                    && isValidSize();
+      
+      // Allow updates to existing posters by authenticated users
+      allow update: if isAuthenticated()
+                    && isValidImageType()
+                    && isValidSize();
+      
+      // Allow deletion by authenticated users (cleanup after rejection)
+      allow delete: if isAuthenticated();
+    }
+    
+    // User Profile Pictures (Optional for future)
+    match /profile-pictures/{userId}/{fileName} {
+      allow read: if true;
+      
+      allow write: if isAuthenticated()
+                   && request.auth.uid == userId
+                   && isValidImageType()
+                   && request.resource.size < 2 * 1024 * 1024; // Max 2MB
+    }
+  }
+}
