@@ -16,22 +16,40 @@ MELA connects students with academic, professional, cultural, and extracurricula
 ## Architecture
 
 ```
-Browser (React SPA)
-  └─ Pages (20+ routes)
-  └─ Services (9 modules → Supabase)
-  └─ AuthContext
-  └─ UI Components
-        │
-   Supabase
-  └─ Auth (email/password)
-  └─ Storage (event posters)
-  └─ RPC (approve_event)
-  └─ RLS (per-table policies)
-        │
-   PostgreSQL
-  └─ users, events, submissions
-  └─ saved_events, organizer_applications
-  └─ comments, likes, registrations
+┌──────────────────────────────────────────────────────────────────────┐
+│                        BROWSER (React SPA)                           │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  PAGES (23 Route Components)                                 │   │
+│  │  Landing │ EventFeed │ Details │ Login │ Profile │ Submit    │   │
+│  │  Dashboard │ Admin │ Apply │ Settings │ About │ Help ...    │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                            │                                         │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  SERVICES (9 API Wrappers)                                   │   │
+│  │  auth │ event │ submission │ moderator │ user │ application  │   │
+│  │  comment │ like │ registration                                │   │
+│  └──────────────────────┬───────────────────────────────────────┘   │
+│                         │                                           │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  CONTEXT & COMPONENTS                                       │   │
+│  │  AuthContext │ ProtectedRoute │ UI Kit (15 components)       │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└──────────────────────────┬───────────────────────────────────────────┘
+                           │ HTTPS
+                           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                    SUPABASE (Backend — Serverless)                    │
+│                                                                      │
+│  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
+│  │  AUTH              │  │  STORAGE         │  │  POSTGRES DB     │  │
+│  │  Email/Password    │  │  Event Posters   │  │  8 Tables        │  │
+│  │  Session Mgmt      │  │  Documents       │  │  RLS Policies    │  │
+│  │  JWT Tokens        │  │  Public Bucket   │  │  RPC Functions   │  │
+│  └────────────────────┘  └──────────────────┘  │  Triggers        │  │
+│                                                  └─────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## User Roles
