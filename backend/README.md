@@ -1,236 +1,190 @@
-# Mela Backend - Firebase Setup Guide
+# Mela Backend - Supabase Setup Guide
 
 ## Overview
-This directory contains the Firebase backend implementation for Mela, including Firestore security rules, Cloud Functions, and storage rules.
+
+This project uses **Supabase** as the backend, providing:
+
+- **Authentication** (email/password + Google OAuth)
+- **Postgres Database** with Row Level Security (RLS)
+- **Storage** for event posters and documents
+- **Edge Functions** (if needed in the future)
 
 ## Project Structure
 
 ```
 backend/
-├── functions/
-│   ├── index.js           # Cloud Functions
-│   ├── package.json       # Node dependencies
-│   └── node_modules/
-├── firestore.rules        # Firestore security rules
-├── firestore.indexes.json # Firestore composite indexes
-├── storage.rules          # Firebase Storage security rules
-└── FIRESTORE_SCHEMA.md    # Database schema documentation
+├── supabase-schema.sql    # Full database schema + RLS policies (run in Supabase SQL Editor)
+└── README.md              # This file
 ```
 
 ## Prerequisites
 
-1. **Node.js** (v18 or higher)
-2. **Firebase CLI** installed globally:
-   ```bash
-   npm install -g firebase-tools
-   ```
-3. **Firebase Project** created at https://console.firebase.google.com
+1. A [Supabase](https://supabase.com) account
+2. A Supabase project created
 
 ## Initial Setup
 
-### 1. Login to Firebase
-```bash
-firebase login
+### 1. Create Supabase Project
+
+1. Go to [Supabase Dashboard](https://supabase.com/dashboard)
+2. Click **New Project**
+3. Set a name, database password, and region
+4. Wait for the project to initialize
+
+### 2. Configure Authentication
+
+1. Go to **Authentication > Providers**
+2. Enable **Email** provider
+   - Turn off "Confirm email" for development
+3. Enable **Google** provider
+   - Add your Google OAuth credentials (Client ID + Secret)
+4. Under **URL Configuration**, add your frontend URL to the redirect URLs
+
+### 3. Create Storage Bucket
+
+1. Go to **Storage**
+2. Click **New Bucket**
+3. Name: `event-posters`
+4. Set it as **Public**
+5. Click **Create**
+
+### 4. Run Database Schema
+
+1. Go to **SQL Editor**
+2. Paste the contents of `backend/supabase-schema.sql`
+3. Click **Run**
+
+This creates all 8 tables:
+- `users` - User profiles with roles
+- `events` - Approved events
+- `submissions` - Pending event submissions
+- `saved_events` - User bookmarked events
+- `organizer_applications` - Organizer verification requests
+- `comments` - Event comments
+- `likes` - Event likes
+- `registrations` - Event registrations
+
+Plus RLS policies, indexes, triggers, and the `approve_event` RPC function.
+
+### 5. Connect Frontend
+
+1. Go to **Settings > API**
+2. Copy the **Project URL** and **anon/public key**
+3. Create a `.env` file in the `frontend/` directory:
+
+```env
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key-here
 ```
 
-### 2. Initialize Firebase (if not already done)
-```bash
-cd backend
-firebase init
-```
+4. Install dependencies and run:
 
-Select:
-- ✅ Firestore
-- ✅ Functions
-- ✅ Storage
-
-### 3. Install Function Dependencies
 ```bash
-cd functions
+cd frontend
 npm install
+npm run dev
 ```
-
-## Deployment
-
-### Deploy Everything
-```bash
-firebase deploy
-```
-
-### Deploy Specific Components
-
-**Cloud Functions only:**
-```bash
-firebase deploy --only functions
-```
-
-**Firestore Rules only:**
-```bash
-firebase deploy --only firestore:rules
-```
-
-**Firestore Indexes only:**
-```bash
-firebase deploy --only firestore:indexes
-```
-
-**Storage Rules only:**
-```bash
-firebase deploy --only storage
-```
-
-## Cloud Functions
-
-### Available Functions
-
-1. **approveEvent** (HTTPS Callable)
-   - Approves a pending event submission
-   - Moves submission from `submissions` to `events` collection
-   - Requires: Moderator role for the event's university
-
-2. **rejectEvent** (HTTPS Callable)
-   - Rejects a pending event submission
-   - Updates status and adds rejection reason
-   - Requires: Moderator role
-
-3. **checkModeratorStatus** (HTTPS Callable)
-   - Returns current user's moderator status
-   - Returns list of universities they can moderate
-
-4. **createUserProfile** (Auth Trigger)
-   - Automatically creates user profile when new user signs up
-   - Sets default role to 'student'
-
-5. **sendEventReminders** (Scheduled)
-   - Runs every hour
-   - Sends reminders for upcoming events
-   - Placeholder for email/push notification implementation
-
-6. **cleanupRejectedSubmissions** (Scheduled)
-   - Runs daily
-   - Deletes rejected submissions older than 30 days
-
-### Testing Functions Locally
-
-```bash
-cd functions
-npm run serve
-```
-
-This starts the Firebase Emulator Suite for local testing.
-
-## Security Rules
-
-### Firestore Rules
-The `firestore.rules` file implements role-based access control:
-
-- **Students**: Can read events, create submissions, manage saved events
-- **Moderators**: Can approve/reject submissions for their universities
-- **Admins**: Full access to manage users and roles
-
-### Storage Rules
-The `storage.rules` file controls event poster uploads:
-
-- Public read access for all images
-- Authenticated users can upload images
-- Max file size: 5MB
-- Allowed types: jpeg, jpg, png, webp
 
 ## Database Schema
 
-See `FIRESTORE_SCHEMA.md` for detailed documentation of:
-- Collection structures
-- Field types
-- Relationships
-- Indexes
+See `supabase-schema.sql` for the complete schema including:
+- Table definitions with column types
+- Row Level Security (RLS) policies
+- Indexes for query performance
+- The `approve_event` RPC function
+- Auto-updating `updated_at` triggers
 
-## Environment Variables
+### Key Tables
 
-For production, set these in Firebase Console → Functions → Configuration:
+| Table | Description |
+|-------|-------------|
+| `users` | User profiles linked to Supabase Auth. Fields: role (student/moderator/admin), moderator_for, university |
+| `events` | Approved events visible to all users |
+| `submissions` | Pending submissions awaiting moderator review |
+| `saved_events` | User bookmarked events |
+| `organizer_applications` | Applications to become an organizer |
+| `comments` | Comments on events |
+| `likes` | Event likes (unique per user+event) |
+| `registrations` | Event registrations (unique per user+event) |
 
-```bash
-# Example: Email service for reminders (future)
-firebase functions:config:set email.api_key="YOUR_API_KEY"
-```
+## Security (Row Level Security)
+
+All tables have RLS enabled. Key policies:
+
+- **Users**: Public read, self-update, admin can manage roles
+- **Events**: Public read, moderators/admins can write
+- **Submissions**: Owner + moderators can read, owner can update while pending
+- **Saved Events**: Users can only manage their own
+- **Comments**: Public read, authenticated users can post, authors/admins can delete
+- **Likes**: Public read, users can like/unlike their own
+- **Registrations**: Users manage own, organizers see their event registrations
 
 ## Creating Moderators
 
-Moderators must be assigned by an admin. To create the first admin:
+The first admin must be set manually:
 
-1. Create a user account through the app
-2. Manually update their role in Firestore Console:
+1. Sign up through the app
+2. Go to Supabase Dashboard > Table Editor > `users`
+3. Find your user and set:
+   - `role` = `admin`
+   - `moderator_for` = `{}` (empty array for admin)
 
-```javascript
-// In Firestore Console, edit the user document
-{
-  role: "admin"  // or "moderator"
-  moderatorFor: ["FAST NUCES", "LUMS"]  // for moderators
-}
+After that, admins can promote users to moderators through the Admin Dashboard UI.
+
+## Seeding Data
+
+To seed sample events:
+
+```bash
+cd seed
+npm install
+# Set environment variables or update seed.mjs with credentials
+VITE_SUPABASE_URL=https://your-project.supabase.co VITE_SUPABASE_ANON_KEY=your-key node seed.mjs
 ```
 
 ## Monitoring
 
-### View Function Logs
-```bash
-firebase functions:log
-```
+- **Supabase Dashboard > Logs** - View auth, database, and storage logs
+- **Supabase Dashboard > Table Editor** - Browse and edit data directly
+- **Supabase Dashboard > API** - View API documentation and test endpoints
 
-### View Real-time Logs
-```bash
-firebase functions:log --only approveEvent
-```
+## Costs & Limits
 
-### Firebase Console
-Monitor usage, errors, and performance at:
-https://console.firebase.google.com
+### Free Tier
+- Database: 500MB storage
+- Storage: 1GB file storage
+- Bandwidth: 2GB/month
+- Edge Functions: 500K invocations/month
+- Auth: 50K monthly active users
 
-## Costs & Quotas
-
-### Spark Plan (Free)
-- Firestore: 1GB storage, 50K reads/day, 20K writes/day
-- Functions: 125K invocations/month, 40K GB-seconds
-- Storage: 5GB, 1GB/day downloads
-
-### Blaze Plan (Pay-as-you-go)
-Required for:
-- Scheduled functions
-- External API calls from functions
-- Higher usage
+### Pro Plan ($25/month)
+- 8GB database
+- 100GB storage
+- 250GB bandwidth
+- No project pausing
 
 ## Troubleshooting
 
-### Functions Not Deploying
-```bash
-# Check Node version
-node --version  # Should be 18+
+### RLS Policy Errors
+If you get "permission denied" errors:
+1. Check that RLS policies are applied (Table Editor > Policies tab)
+2. Verify the user is authenticated
+3. Check user role in the `users` table
 
-# Clear cache and reinstall
-cd functions
-rm -rf node_modules package-lock.json
-npm install
-```
+### Storage Upload Errors
+If poster uploads fail:
+1. Verify the `event-posters` bucket exists and is public
+2. Check file size (max 5MB) and type (jpeg, png, webp)
 
-### Permission Denied Errors
-- Check that security rules are deployed
-- Verify user authentication
-- Check user role in Firestore
-
-### CORS Errors
-- Ensure Firebase config is correct in frontend
-- Check that functions are deployed
-- Verify API keys and domain whitelist
-
-## Development Workflow
-
-1. Make changes to functions/rules
-2. Test locally with emulators
-3. Deploy to Firebase
-4. Monitor logs for errors
-5. Update documentation
+### Auth Issues
+If Google OAuth fails:
+1. Verify redirect URL matches your frontend URL
+2. Check Google OAuth credentials in Authentication settings
 
 ## Additional Resources
 
-- [Firebase Documentation](https://firebase.google.com/docs)
-- [Cloud Functions Guide](https://firebase.google.com/docs/functions)
-- [Firestore Security Rules](https://firebase.google.com/docs/firestore/security/get-started)
-- [Firebase CLI Reference](https://firebase.google.com/docs/cli)
+- [Supabase Documentation](https://supabase.com/docs)
+- [Supabase Auth Guide](https://supabase.com/docs/guides/auth)
+- [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
+- [Supabase Storage](https://supabase.com/docs/guides/storage)
+

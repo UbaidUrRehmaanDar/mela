@@ -217,13 +217,12 @@ const fetchEventDetails = async (eventId) => {
 ### Submit an Event
 ```javascript
 import { submitEvent } from '../services';
-import { Timestamp } from 'firebase/firestore';
 
 const handleSubmit = async (formData, posterFile) => {
   const eventData = {
     title: formData.title,
     description: formData.description,
-    dateTime: Timestamp.fromDate(new Date(formData.dateTime)),
+    dateTime: new Date(formData.dateTime),
     university: formData.university,
     category: formData.category,
     venue: formData.venue

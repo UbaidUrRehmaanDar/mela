@@ -1,53 +1,187 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
+import { Search, SlidersHorizontal, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { getFilteredEvents, searchEvents } from '../services';
-import { formatEventDate } from '../utils/constants';
-import Card from '../components/ui/Card';
-import Badge from '../components/ui/Badge';
+import { supabase } from '../config/supabase';
+import { EVENT_UNIVERSITIES, CATEGORY_COLORS, CATEGORIES } from '../utils/constants';
+import { useAuth } from '../context/AuthContext';
 import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
+import EventCard from '../components/ui/EventCard';
+import Badge from '../components/ui/Badge';
+import PageHeader from '../components/ui/PageHeader';
+import EmptyState from '../components/ui/EmptyState';
+import { SkeletonGrid } from '../components/ui/Skeleton';
 
-const CATEGORY_COLORS = {
-  'Tech': 'var(--mela-yellow)',
-  'Workshop': 'var(--mela-pink)',
-  'Seminar': 'var(--mela-teal)',
-  'Hackathon': 'var(--mela-orange)',
-  'Meetup': 'var(--mela-purple)',
-  'Conference': 'var(--mela-blue)',
-  'Competition': 'var(--mela-green)',
-  'Other': 'var(--mela-white)'
+const PAGE_SIZE = 12;
+
+const INTEREST_TO_CATEGORIES_MAP = {
+  Technology: ['Tech', 'Hackathon', 'Conference', 'Workshop'],
+  'Artificial Intelligence': ['Tech', 'Hackathon', 'Workshop'],
+  'Software Development': ['Tech', 'Hackathon', 'Workshop'],
+  Business: ['Seminar', 'Conference', 'Meetup'],
+  Entrepreneurship: ['Seminar', 'Conference', 'Meetup'],
+  Arts: ['Workshop', 'Meetup', 'Other'],
+  Design: ['Workshop', 'Meetup', 'Other'],
+  Sports: ['Competition', 'Other'],
+  'Medical Sciences': ['Seminar', 'Conference'],
+  Engineering: ['Tech', 'Workshop', 'Conference'],
+  Research: ['Seminar', 'Conference'],
+  'Community Service': ['Meetup', 'Other'],
 };
 
+function FilterSidebar({ filters, onFilterChange, onApply, onReset, mobile = false }) {
+  return (
+    <aside className={`filter-sidebar ${mobile ? 'open' : ''}`} aria-label="Event filters">
+      <h3>Filters</h3>
+
+      <div className="filter-group">
+        <span className="filter-group-title">By Category</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {CATEGORIES.map((cat) => (
+            <label key={cat} className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={filters.category === cat}
+                onChange={(e) => onFilterChange('category', e.target.checked ? cat : '')}
+              />
+              {cat}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="filter-group">
+        <span className="filter-group-title">By University</span>
+        <select
+          value={filters.university}
+          onChange={(e) => onFilterChange('university', e.target.value)}
+          aria-label="Filter by university"
+        >
+          <option value="">All Universities</option>
+          {EVENT_UNIVERSITIES.map((u) => (
+            <option key={u} value={u}>{u}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="filter-group">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={filters.upcomingOnly}
+            onChange={(e) => onFilterChange('upcomingOnly', e.target.checked)}
+          />
+          Upcoming Only
+        </label>
+      </div>
+
+      <div className="filter-actions">
+        <Button variant="primary" onClick={onApply} style={{ width: '100%', minWidth: 0 }}>
+          Apply Filters
+        </Button>
+        <Button variant="outline" onClick={onReset} style={{ width: '100%', minWidth: 0 }}>
+          Reset
+        </Button>
+      </div>
+    </aside>
+  );
+}
+
 export default function EventFeed() {
+  const [searchParams] = useSearchParams();
+  const { profile } = useAuth();
+  const [allEvents, setAllEvents] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
   const [filters, setFilters] = useState({
     university: '',
-    category: '',
-    upcomingOnly: true
+    category: searchParams.get('category') || '',
+    upcomingOnly: true,
   });
-  const [showFilters, setShowFilters] = useState(false);
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  const [page, setPage] = useState(1);
+  const [recommendedEvents, setRecommendedEvents] = useState([]);
+  const [eventStats, setEventStats] = useState({});
+
+  const totalPages = Math.ceil(allEvents.length / PAGE_SIZE);
+
+  const fetchCountsForEvents = async (eventList) => {
+    if (!eventList.length) return;
+    const ids = eventList.map((e) => e.id);
+
+    const [likesRes, commentsRes, regsRes] = await Promise.all([
+      supabase.from('likes').select('event_id, id').in('event_id', ids),
+      supabase.from('comments').select('event_id, id').in('event_id', ids),
+      supabase.from('registrations').select('event_id, id').in('event_id', ids),
+    ]);
+
+    const counts = {};
+    ids.forEach((id) => { counts[id] = { likes: 0, comments: 0, registrations: 0 }; });
+
+    (likesRes.data || []).forEach((r) => { if (counts[r.event_id]) counts[r.event_id].likes++; });
+    (commentsRes.data || []).forEach((r) => { if (counts[r.event_id]) counts[r.event_id].comments++; });
+    (regsRes.data || []).forEach((r) => { if (counts[r.event_id]) counts[r.event_id].registrations++; });
+
+    setEventStats(counts);
+  };
+
+  const paginate = useCallback((list, p) => {
+    const start = (p - 1) * PAGE_SIZE;
+    const sliced = list.slice(start, start + PAGE_SIZE);
+    setEvents(sliced);
+    fetchCountsForEvents(sliced);
+  }, []);
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
     const result = await getFilteredEvents(filters);
     if (result.success) {
-      setEvents(result.events);
+      setAllEvents(result.events);
+      setPage(1);
+      paginate(result.events, 1);
     }
     setLoading(false);
-  }, [filters]);
+  }, [filters, paginate]);
 
   useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
+
+  useEffect(() => {
+    if (profile?.interests?.length > 0 && allEvents.length > 0) {
+      const targetCategories = new Set();
+      profile.interests.forEach((interest) => {
+        (INTEREST_TO_CATEGORIES_MAP[interest] || []).forEach((c) => targetCategories.add(c));
+      });
+
+      const recommended = allEvents.filter((event) => targetCategories.has(event.category));
+      recommended.sort((a, b) => {
+        const isAMyUni = a.university === profile.university;
+        const isBMyUni = b.university === profile.university;
+        if (isAMyUni && !isBMyUni) return -1;
+        if (!isAMyUni && isBMyUni) return 1;
+        return a.dateTime - b.dateTime;
+      });
+
+      setRecommendedEvents(recommended);
+    } else {
+      setRecommendedEvents([]);
+    }
+  }, [profile, allEvents]);
+
+  useEffect(() => {
+    paginate(allEvents, page);
+  }, [page, allEvents, paginate]);
 
   const handleSearch = async () => {
     if (searchTerm.trim()) {
       setLoading(true);
       const result = await searchEvents(searchTerm);
       if (result.success) {
-        setEvents(result.events);
+        setAllEvents(result.events);
+        setPage(1);
+        paginate(result.events, 1);
       }
       setLoading(false);
     } else {
@@ -59,128 +193,181 @@ export default function EventFeed() {
     setFilters({ ...filters, [key]: value });
   };
 
+  const handleReset = () => {
+    setFilters({ university: '', category: '', upcomingOnly: true });
+    setSearchTerm('');
+    setShowMobileFilters(false);
+  };
+
   return (
-    <div className="container">
-      <div className="flex-between" style={{ marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <h1 style={{ fontSize: '3rem', fontWeight: 900, textTransform: 'uppercase', background: 'var(--mela-orange)', color: '#fff', padding: '0 1rem', border: '3px solid black', transform: 'rotate(-1deg)' }}>
-          Event Feed
-        </h1>
-        <div style={{ display: 'flex', gap: '1rem', width: '100%', maxWidth: '400px' }}>
-          <Input 
-            type="text" 
-            placeholder="Search events..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-            style={{ marginBottom: 0, flexGrow: 1 }} 
-          />
-          <Button variant="primary" onClick={() => setShowFilters(!showFilters)}>
-            {showFilters ? 'Hide' : 'Filter'}
-          </Button>
-        </div>
+    <div className="container animate-fade-in">
+      <PageHeader
+        title="Discover Events"
+        subtitle="Find hackathons, workshops, and meetups across campuses."
+        breadcrumb={[{ label: 'Home', to: '/' }, { label: 'Events' }]}
+        actions={
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div className="search-bar">
+              <input
+                type="text"
+                placeholder="Search events by name..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                aria-label="Search events"
+              />
+              <button onClick={handleSearch} title="Search" aria-label="Search">
+                <Search size={16} strokeWidth={2.5} />
+              </button>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="filter-panel-mobile-trigger"
+              onClick={() => setShowMobileFilters(!showMobileFilters)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 'auto' }}
+            >
+              <SlidersHorizontal size={14} />
+              Filters
+            </Button>
+          </div>
+        }
+      />
+
+      <div className="category-pills" style={{ marginBottom: '24px' }}>
+        <button
+          type="button"
+          className={`btn-pill ${!filters.category ? 'active' : ''}`}
+          style={!filters.category ? { background: 'var(--yellow)' } : undefined}
+          onClick={() => handleFilterChange('category', '')}
+        >
+          All
+        </button>
+        {CATEGORIES.map((cat) => (
+          <button
+            key={cat}
+            type="button"
+            className={`btn-pill ${filters.category === cat ? 'active' : ''}`}
+            style={{ background: CATEGORY_COLORS[cat] || 'var(--off-white)' }}
+            onClick={() => handleFilterChange('category', cat === filters.category ? '' : cat)}
+          >
+            {cat}
+          </button>
+        ))}
       </div>
 
-      {showFilters && (
-        <div style={{ 
-          padding: '1.5rem', 
-          background: 'var(--mela-yellow)', 
-          border: '3px solid black',
-          marginBottom: '2rem'
-        }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label>University</label>
-              <select 
-                className="brutal-border"
-                value={filters.university}
-                onChange={(e) => handleFilterChange('university', e.target.value)}
-                style={{ width: '100%', padding: '0.75rem', fontWeight: 700 }}
-              >
-                <option value="">All Universities</option>
-                <option value="FAST NUCES">FAST NUCES</option>
-                <option value="LUMS">LUMS</option>
-                <option value="PUCIT">PUCIT</option>
-                <option value="UET">UET</option>
-                <option value="Punjab University">Punjab University</option>
-                <option value="NUST">NUST</option>
-                <option value="COMSATS">COMSATS</option>
-              </select>
-            </div>
-
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label>Category</label>
-              <select 
-                className="brutal-border"
-                value={filters.category}
-                onChange={(e) => handleFilterChange('category', e.target.value)}
-                style={{ width: '100%', padding: '0.75rem', fontWeight: 700 }}
-              >
-                <option value="">All Categories</option>
-                <option value="Tech">Tech</option>
-                <option value="Workshop">Workshop</option>
-                <option value="Seminar">Seminar</option>
-                <option value="Hackathon">Hackathon</option>
-                <option value="Meetup">Meetup</option>
-                <option value="Conference">Conference</option>
-                <option value="Competition">Competition</option>
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'end' }}>
-              <label style={{ display: 'flex', alignItems: 'center', fontWeight: 700, cursor: 'pointer' }}>
-                <input 
-                  type="checkbox"
-                  checked={filters.upcomingOnly}
-                  onChange={(e) => handleFilterChange('upcomingOnly', e.target.checked)}
-                  style={{ marginRight: '0.5rem', width: '20px', height: '20px' }}
-                />
-                Upcoming Only
-              </label>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '4rem' }}>
-          <h2>Loading events...</h2>
-        </div>
-      ) : events.length === 0 ? (
-        <div style={{ 
-          textAlign: 'center', 
-          padding: '4rem', 
-          background: 'var(--mela-white)',
-          border: '3px solid black'
-        }}>
-          <h2>No events found</h2>
-          <p style={{ color: '#666', marginTop: '1rem' }}>
-            {searchTerm ? 'Try a different search term' : 'No events match your filters'}
-          </p>
-        </div>
-      ) : (
+      {showMobileFilters && (
         <>
-          <div style={{ marginBottom: '1rem', fontWeight: 700, fontSize: '1.1rem' }}>
-            Found {events.length} event{events.length !== 1 ? 's' : ''}
-          </div>
-          <div className="grid-3">
-            {events.map(event => (
-              <Card key={event.id}>
-                <div>
-                  <Badge color={CATEGORY_COLORS[event.category] || 'var(--mela-white)'}>
-                    {event.category}
-                  </Badge>
-                </div>
-                <h2>{event.title}</h2>
-                <span className="uni">{event.university}</span>
-                <p className="date">{formatEventDate(event.dateTime)}</p>
-                <Link to={`/events/${event.id}`}>
-                  <Button variant="outline" style={{ width: '100%' }}>View Details & Save</Button>
-                </Link>
-              </Card>
-            ))}
-          </div>
+          <div className="modal-overlay" onClick={() => setShowMobileFilters(false)} aria-hidden="true" />
+          <FilterSidebar
+            filters={filters}
+            onFilterChange={handleFilterChange}
+            onApply={() => { fetchEvents(); setShowMobileFilters(false); }}
+            onReset={handleReset}
+            mobile
+          />
         </>
       )}
+
+      <div className="discover-layout">
+        <FilterSidebar
+          filters={filters}
+          onFilterChange={handleFilterChange}
+          onApply={fetchEvents}
+          onReset={handleReset}
+        />
+
+        <div>
+          {!loading && recommendedEvents.length > 0 && (
+            <div className="recommended-section">
+              <h2 className="section-heading" style={{ fontSize: '1.75rem' }}>
+                <Sparkles size={22} aria-hidden="true" /> Recommended for you
+              </h2>
+              <div className="grid-3">
+                {recommendedEvents.slice(0, 3).map((event) => (
+                  <EventCard
+                    key={`rec-${event.id}`}
+                    event={event}
+                    variant="recommended"
+                    extraBadges={
+                      event.university === profile?.university ? (
+                        <Badge className="badge-verified">My Campus</Badge>
+                      ) : null
+                    }
+                    showRegister
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {loading ? (
+            <SkeletonGrid count={6} />
+          ) : allEvents.length === 0 ? (
+            <EmptyState
+              icon={Search}
+              title="No events found"
+              description={searchTerm ? 'Try a different search term' : 'No events match your filters'}
+              action={
+                <Button variant="outline" onClick={handleReset}>
+                  Clear Filters
+                </Button>
+              }
+            />
+          ) : (
+            <>
+              <p className="font-ui" style={{ fontWeight: 700, marginBottom: '16px' }}>
+                {allEvents.length} event{allEvents.length !== 1 ? 's' : ''} found
+                {totalPages > 1 && ` — page ${page} of ${totalPages}`}
+              </p>
+
+              <div className="grid-4">
+                {events.map((event) => (
+                  <EventCard key={event.id} event={event} stats={eventStats[event.id]} showRegister />
+                ))}
+              </div>
+
+              {totalPages > 1 && (
+                <div className="pagination">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    style={{ minWidth: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <ChevronLeft size={14} /> Prev
+                  </Button>
+
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setPage(p)}
+                        className={`page-num ${p === page ? 'active' : ''}`}
+                        aria-current={p === page ? 'page' : undefined}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    style={{ minWidth: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    Next <ChevronRight size={14} />
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

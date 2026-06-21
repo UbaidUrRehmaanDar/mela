@@ -4,3 +4,7 @@ export * from './eventService';
 export * from './submissionService';
 export * from './moderatorService';
 export * from './userService';
+export * from './applicationService';
+export * from './commentService';
+export * from './likeService';
+export * from './registrationService';

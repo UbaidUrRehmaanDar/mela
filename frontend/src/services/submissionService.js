@@ -1,63 +1,59 @@
-// Submission Service for Mela
-import { 
-  collection, 
-  addDoc, 
-  query,
-  where,
-  getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-  serverTimestamp,
-  getDoc
-} from 'firebase/firestore';
-import { db, auth } from '../firebase';
+// Submission Service for Mela (Supabase)
 import { supabase, STORAGE_BUCKET } from '../config/supabase';
+import { getAuthUser } from './authService';
 
 /**
  * Submit a new event for moderation
  */
 export const submitEvent = async (eventData, posterFile) => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'You must be logged in to submit events' };
     }
 
-    // First, create the submission document
     const submissionData = {
       title: eventData.title,
       description: eventData.description,
-      dateTime: eventData.dateTime, // Should be a Firestore Timestamp
+      date_time: eventData.dateTime instanceof Date
+        ? eventData.dateTime.toISOString()
+        : new Date(eventData.dateTime).toISOString(),
       university: eventData.university,
       category: eventData.category,
       venue: eventData.venue || '',
-      posterURL: '', // Will be updated after upload
-      organizerEmail: user.email,
-      organizerId: user.uid,
+      event_url: eventData.eventURL || '',
+      poster_url: '',
+      organizer_email: user.email,
+      organizer_id: user.id,
       status: 'pending',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
     };
 
-    const submissionRef = await addDoc(collection(db, 'submissions'), submissionData);
-    const submissionId = submissionRef.id;
+    const { data: inserted, error } = await supabase
+      .from('submissions')
+      .insert(submissionData)
+      .select()
+      .single();
 
-    // Upload poster image if provided
+    if (error) throw error;
+
+    const submissionId = inserted.id;
+
     if (posterFile) {
-      const posterURL = await uploadEventPoster(submissionId, posterFile);
-      
-      // Update submission with poster URL
-      await updateDoc(submissionRef, {
-        posterURL: posterURL,
-        updatedAt: serverTimestamp()
-      });
+      try {
+        const posterURL = await uploadEventPoster(submissionId, posterFile);
+        await supabase
+          .from('submissions')
+          .update({ poster_url: posterURL })
+          .eq('id', submissionId);
+      } catch (uploadErr) {
+        console.warn('Poster upload failed, submitting without poster:', uploadErr.message);
+      }
     }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       submissionId,
-      message: 'Event submitted successfully and is awaiting moderation' 
+      message: 'Event submitted successfully and is awaiting moderation',
     };
   } catch (error) {
     console.error('Error submitting event:', error);
@@ -70,34 +66,23 @@ export const submitEvent = async (eventData, posterFile) => {
  */
 export const uploadEventPoster = async (eventId, file) => {
   try {
-    // Validate file type
     if (!file.type.startsWith('image/')) {
       throw new Error('Only image files are allowed');
     }
 
-    // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
       throw new Error('Image size must be less than 5MB');
     }
 
-    // Create unique filename
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${eventId}-${Date.now()}.${fileExt}`;
-    const filePath = `${fileName}`;
+    const fileExtension = file.name.split('.').pop();
+    const filePath = `${eventId}/poster.${fileExtension}`;
 
-    // Upload to Supabase Storage
-    const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
       .from(STORAGE_BUCKET)
-      .upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: true
-      });
+      .upload(filePath, file, { upsert: true });
 
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
 
-    // Get public URL
     const { data: { publicUrl } } = supabase.storage
       .from(STORAGE_BUCKET)
       .getPublicUrl(filePath);
@@ -114,29 +99,24 @@ export const uploadEventPoster = async (eventId, file) => {
  */
 export const getMySubmissions = async () => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated', submissions: [] };
     }
 
-    const submissionsRef = collection(db, 'submissions');
-    const q = query(
-      submissionsRef,
-      where('organizerId', '==', user.uid)
-    );
-    const querySnapshot = await getDocs(q);
+    const { data, error } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('organizer_id', user.id)
+      .order('created_at', { ascending: false });
 
-    const submissions = [];
-    querySnapshot.forEach((doc) => {
-      submissions.push({
-        id: doc.id,
-        ...doc.data(),
-        dateTime: doc.data().dateTime?.toDate()
-      });
-    });
+    if (error) throw error;
 
-    // Sort by creation date
-    submissions.sort((a, b) => b.createdAt?.toDate() - a.createdAt?.toDate());
+    const submissions = (data || []).map((s) => ({
+      ...s,
+      dateTime: s.date_time ? new Date(s.date_time) : null,
+      createdAt: s.created_at ? new Date(s.created_at) : null,
+    }));
 
     return { success: true, submissions };
   } catch (error) {
@@ -150,36 +130,57 @@ export const getMySubmissions = async () => {
  */
 export const updateSubmission = async (submissionId, updates, newPosterFile) => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated' };
     }
 
-    // Verify ownership
-    const submissionDoc = await getDoc(doc(db, 'submissions', submissionId));
-    if (!submissionDoc.exists()) {
+    const { data: sub, error: fetchError } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('id', submissionId)
+      .single();
+
+    if (fetchError || !sub) {
       return { success: false, error: 'Submission not found' };
     }
 
-    if (submissionDoc.data().organizerId !== user.uid) {
+    if (sub.organizer_id !== user.id) {
       return { success: false, error: 'Unauthorized' };
     }
 
-    if (submissionDoc.data().status !== 'pending') {
+    if (sub.status !== 'pending') {
       return { success: false, error: 'Cannot update non-pending submissions' };
     }
 
-    // Upload new poster if provided
     if (newPosterFile) {
       const posterURL = await uploadEventPoster(submissionId, newPosterFile);
+      updates.poster_url = posterURL;
       updates.posterURL = posterURL;
     }
 
-    // Update submission
-    await updateDoc(doc(db, 'submissions', submissionId), {
-      ...updates,
-      updatedAt: serverTimestamp()
-    });
+    const dbUpdates = {};
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.dateTime !== undefined) {
+      dbUpdates.date_time = updates.dateTime instanceof Date
+        ? updates.dateTime.toISOString()
+        : new Date(updates.dateTime).toISOString();
+    }
+    if (updates.university !== undefined) dbUpdates.university = updates.university;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.venue !== undefined) dbUpdates.venue = updates.venue;
+    if (updates.eventURL !== undefined) dbUpdates.event_url = updates.eventURL;
+    if (updates.poster_url || updates.posterURL) {
+      dbUpdates.poster_url = updates.poster_url || updates.posterURL;
+    }
+
+    const { error: updateError } = await supabase
+      .from('submissions')
+      .update(dbUpdates)
+      .eq('id', submissionId);
+
+    if (updateError) throw updateError;
 
     return { success: true, message: 'Submission updated successfully' };
   } catch (error) {
@@ -189,35 +190,69 @@ export const updateSubmission = async (submissionId, updates, newPosterFile) => 
 };
 
 /**
- * Delete a rejected submission
+ * Delete a pending or rejected submission (owner only)
  */
 export const deleteSubmission = async (submissionId) => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated' };
     }
 
-    // Verify ownership and status
-    const submissionDoc = await getDoc(doc(db, 'submissions', submissionId));
-    if (!submissionDoc.exists()) {
+    // First fetch to get poster URL and validate ownership + status
+    const { data: sub, error: fetchError } = await supabase
+      .from('submissions')
+      .select('organizer_id, status, poster_url')
+      .eq('id', submissionId)
+      .single();
+
+    if (fetchError) {
+      console.error('Fetch error:', fetchError);
+      return { success: false, error: 'Submission not found or access denied' };
+    }
+
+    if (!sub) {
       return { success: false, error: 'Submission not found' };
     }
 
-    const data = submissionDoc.data();
-    if (data.organizerId !== user.uid) {
-      return { success: false, error: 'Unauthorized' };
+    if (sub.organizer_id !== user.id) {
+      return { success: false, error: 'Unauthorized — you do not own this submission' };
     }
 
-    if (data.status !== 'rejected') {
-      return { success: false, error: 'Can only delete rejected submissions' };
+    if (sub.status !== 'rejected' && sub.status !== 'pending') {
+      return { success: false, error: 'Can only delete pending or rejected submissions' };
     }
 
-    // Note: Cloudinary images can be deleted via API if needed
-    // For now, we'll leave them (they're cheap and can be managed in Cloudinary dashboard)
+    // Delete poster from storage (non-fatal)
+    if (sub.poster_url) {
+      try {
+        const parts = sub.poster_url.split(`/public/${STORAGE_BUCKET}/`);
+        const filePath = parts.length > 1 ? parts[1] : null;
+        if (filePath) {
+          await supabase.storage.from(STORAGE_BUCKET).remove([filePath]);
+        }
+      } catch (err) {
+        console.warn('Could not delete poster:', err);
+      }
+    }
 
-    // Delete submission document
-    await deleteDoc(doc(db, 'submissions', submissionId));
+    // Delete the submission row — include organizer_id filter as extra safety
+    const { error: deleteError, data: deleted } = await supabase
+      .from('submissions')
+      .delete()
+      .eq('id', submissionId)
+      .eq('organizer_id', user.id)
+      .select('id');
+
+    if (deleteError) {
+      console.error('Delete error:', deleteError);
+      throw deleteError;
+    }
+
+    if (!deleted || deleted.length === 0) {
+      // RLS blocked it silently
+      return { success: false, error: 'Delete was blocked — check Supabase RLS policies for the submissions table' };
+    }
 
     return { success: true, message: 'Submission deleted successfully' };
   } catch (error) {
@@ -231,16 +266,20 @@ export const deleteSubmission = async (submissionId) => {
  */
 export const getSubmissionById = async (submissionId) => {
   try {
-    const submissionDoc = await getDoc(doc(db, 'submissions', submissionId));
-    
-    if (!submissionDoc.exists()) {
+    const { data, error } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('id', submissionId)
+      .single();
+
+    if (error || !data) {
       return { success: false, error: 'Submission not found', submission: null };
     }
 
     const submission = {
-      id: submissionDoc.id,
-      ...submissionDoc.data(),
-      dateTime: submissionDoc.data().dateTime?.toDate()
+      ...data,
+      dateTime: data.date_time ? new Date(data.date_time) : null,
+      createdAt: data.created_at ? new Date(data.created_at) : null,
     };
 
     return { success: true, submission };

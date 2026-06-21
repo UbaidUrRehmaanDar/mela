@@ -1,69 +1,77 @@
-// Moderator Service for Mela
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs,
-  doc,
-  updateDoc,
-  serverTimestamp
-} from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { db } from '../firebase';
-
-const functions = getFunctions();
+// Moderator Service for Mela (Supabase)
+import { supabase } from '../config/supabase';
+import { getAuthUser } from './authService';
 
 /**
- * Check if current user is a moderator
+ * Check if current user is a moderator or admin
  */
 export const checkModeratorStatus = async () => {
   try {
-    const checkStatus = httpsCallable(functions, 'checkModeratorStatus');
-    const result = await checkStatus();
-    return { 
-      success: true, 
-      ...result.data 
+    const currentUser = await getAuthUser();
+    if (!currentUser) {
+      return { success: true, isModerator: false, universities: [], university: '' };
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('role, moderator_for, university')
+      .eq('id', currentUser.id)
+      .single();
+
+    if (error || !data) {
+      return { success: true, isModerator: false, universities: [], university: '' };
+    }
+
+    // Admins can moderate everything — signal with a sentinel value
+    if (data.role === 'admin') {
+      return {
+        success: true,
+        isModerator: true,
+        isAdmin: true,
+        universities: [],        // empty = fetch ALL universities
+        university: data.university || '',
+      };
+    }
+
+    return {
+      success: true,
+      isModerator: data.role === 'moderator',
+      isAdmin: false,
+      universities: data.moderator_for || [],
+      university: data.university || '',
     };
   } catch (error) {
     console.error('Error checking moderator status:', error);
-    return { 
-      success: false, 
-      isModerator: false, 
-      universities: [],
-      error: error.message 
-    };
+    return { success: false, isModerator: false, universities: [], error: error.message };
   }
 };
 
 /**
- * Get pending submissions for moderator's universities
+ * Get pending submissions.
+ * Pass an empty array for universities to fetch ALL (admin use).
  */
 export const getPendingSubmissions = async (universities) => {
   try {
-    if (!universities || universities.length === 0) {
-      return { success: true, submissions: [] };
+    let query = supabase
+      .from('submissions')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+
+    // Non-empty array = moderator scoped to specific universities
+    if (universities && universities.length > 0) {
+      query = query.in('university', universities);
     }
+    // Empty array = admin, no university filter → fetch all
 
-    const submissionsRef = collection(db, 'submissions');
-    const q = query(
-      submissionsRef,
-      where('university', 'in', universities),
-      where('status', '==', 'pending')
-    );
-    
-    const querySnapshot = await getDocs(q);
-    
-    const submissions = [];
-    querySnapshot.forEach((doc) => {
-      submissions.push({
-        id: doc.id,
-        ...doc.data(),
-        dateTime: doc.data().dateTime?.toDate()
-      });
-    });
+    const { data, error } = await query;
+    if (error) throw error;
 
-    // Sort by creation date (newest first)
-    submissions.sort((a, b) => b.createdAt?.toDate() - a.createdAt?.toDate());
+    const submissions = (data || []).map((s) => ({
+      ...s,
+      dateTime: s.date_time ? new Date(s.date_time) : null,
+      createdAt: s.created_at ? new Date(s.created_at) : null,
+    }));
 
     return { success: true, submissions };
   } catch (error) {
@@ -73,58 +81,32 @@ export const getPendingSubmissions = async (universities) => {
 };
 
 /**
- * Get all submissions (pending and rejected) for moderator's universities
- */
-export const getAllSubmissions = async (universities) => {
-  try {
-    if (!universities || universities.length === 0) {
-      return { success: true, submissions: [] };
-    }
-
-    const submissionsRef = collection(db, 'submissions');
-    const q = query(
-      submissionsRef,
-      where('university', 'in', universities)
-    );
-    
-    const querySnapshot = await getDocs(q);
-    
-    const submissions = [];
-    querySnapshot.forEach((doc) => {
-      submissions.push({
-        id: doc.id,
-        ...doc.data(),
-        dateTime: doc.data().dateTime?.toDate()
-      });
-    });
-
-    // Sort by creation date (newest first)
-    submissions.sort((a, b) => b.createdAt?.toDate() - a.createdAt?.toDate());
-
-    return { success: true, submissions };
-  } catch (error) {
-    console.error('Error fetching submissions:', error);
-    return { success: false, error: error.message, submissions: [] };
-  }
-};
-
-/**
  * Approve an event submission
+ * Uses the approve_event RPC function for transactional safety
  */
 export const approveEvent = async (submissionId) => {
   try {
-    const approveEventFn = httpsCallable(functions, 'approveEvent');
-    const result = await approveEventFn({ submissionId });
-    
-    return { 
-      success: true, 
-      message: result.data.message 
+    const currentUser = await getAuthUser();
+    if (!currentUser) {
+      return { success: false, error: 'Not authenticated.' };
+    }
+
+    const { error } = await supabase.rpc('approve_event', {
+      submission_id: submissionId,
+      approver_id: currentUser.id,
+    });
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      message: 'Event approved successfully.',
     };
   } catch (error) {
     console.error('Error approving event:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to approve event' 
+    return {
+      success: false,
+      error: error.message || 'Failed to approve event',
     };
   }
 };
@@ -134,21 +116,54 @@ export const approveEvent = async (submissionId) => {
  */
 export const rejectEvent = async (submissionId, reason) => {
   try {
-    const rejectEventFn = httpsCallable(functions, 'rejectEvent');
-    const result = await rejectEventFn({ 
-      submissionId, 
-      reason: reason || 'No reason provided' 
-    });
-    
-    return { 
-      success: true, 
-      message: result.data.message 
+    const currentUser = await getAuthUser();
+    if (!currentUser) {
+      return { success: false, error: 'Not authenticated.' };
+    }
+
+    const { data: sub } = await supabase
+      .from('submissions')
+      .select('university')
+      .eq('id', submissionId)
+      .single();
+
+    if (!sub) {
+      return { success: false, error: 'Submission not found.' };
+    }
+
+    const { data: userData } = await supabase
+      .from('users')
+      .select('role, moderator_for')
+      .eq('id', currentUser.id)
+      .single();
+
+    const isMod = userData?.role === 'moderator' &&
+      userData?.moderator_for?.includes(sub.university);
+
+    if (!isMod && userData?.role !== 'admin') {
+      return { success: false, error: 'You are not authorized to reject events for this university.' };
+    }
+
+    const { error } = await supabase
+      .from('submissions')
+      .update({
+        status: 'rejected',
+        rejection_reason: reason || 'No reason provided',
+        rejected_by: currentUser.id,
+      })
+      .eq('id', submissionId);
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      message: 'Event rejected successfully.',
     };
   } catch (error) {
     console.error('Error rejecting event:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to reject event' 
+    return {
+      success: false,
+      error: error.message || 'Failed to reject event',
     };
   }
 };
@@ -158,22 +173,36 @@ export const rejectEvent = async (submissionId, reason) => {
  */
 export const editEvent = async (eventId, updates) => {
   try {
-    const eventRef = doc(db, 'events', eventId);
-    
-    await updateDoc(eventRef, {
-      ...updates,
-      updatedAt: serverTimestamp()
-    });
+    const dbUpdates = {};
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.dateTime !== undefined) {
+      dbUpdates.date_time = updates.dateTime instanceof Date
+        ? updates.dateTime.toISOString()
+        : new Date(updates.dateTime).toISOString();
+    }
+    if (updates.university !== undefined) dbUpdates.university = updates.university;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.venue !== undefined) dbUpdates.venue = updates.venue;
+    if (updates.posterURL !== undefined) dbUpdates.poster_url = updates.posterURL;
+    if (updates.eventURL !== undefined) dbUpdates.event_url = updates.eventURL;
 
-    return { 
-      success: true, 
-      message: 'Event updated successfully' 
+    const { error } = await supabase
+      .from('events')
+      .update(dbUpdates)
+      .eq('id', eventId);
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      message: 'Event updated successfully',
     };
   } catch (error) {
     console.error('Error editing event:', error);
-    return { 
-      success: false, 
-      error: error.message 
+    return {
+      success: false,
+      error: error.message,
     };
   }
 };
@@ -187,25 +216,18 @@ export const getModeratedEvents = async (universities) => {
       return { success: true, events: [] };
     }
 
-    const eventsRef = collection(db, 'events');
-    const q = query(
-      eventsRef,
-      where('university', 'in', universities)
-    );
-    
-    const querySnapshot = await getDocs(q);
-    
-    const events = [];
-    querySnapshot.forEach((doc) => {
-      events.push({
-        id: doc.id,
-        ...doc.data(),
-        dateTime: doc.data().dateTime?.toDate()
-      });
-    });
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .in('university', universities)
+      .order('date_time', { ascending: false });
 
-    // Sort by date (newest first)
-    events.sort((a, b) => b.dateTime - a.dateTime);
+    if (error) throw error;
+
+    const events = (data || []).map((e) => ({
+      ...e,
+      dateTime: e.date_time ? new Date(e.date_time) : null,
+    }));
 
     return { success: true, events };
   } catch (error) {

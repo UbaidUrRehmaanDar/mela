@@ -1,33 +1,25 @@
-// User Service for Mela
-import { 
-  doc, 
-  getDoc,
-  updateDoc, 
-  collection,
-  addDoc,
-  query,
-  where,
-  getDocs,
-  deleteDoc,
-  serverTimestamp,
-  Timestamp
-} from 'firebase/firestore';
-import { db, auth } from '../firebase';
+// User Service for Mela (Supabase)
+import { supabase } from '../config/supabase';
+import { getAuthUser } from './authService';
 
 /**
  * Get user profile by ID
  */
 export const getUserProfile = async (userId) => {
   try {
-    const userDoc = await getDoc(doc(db, 'users', userId));
-    
-    if (!userDoc.exists()) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (error || !data) {
       return { success: false, error: 'User not found', user: null };
     }
 
-    return { 
-      success: true, 
-      user: { id: userDoc.id, ...userDoc.data() } 
+    return {
+      success: true,
+      user: { id: data.id, ...data },
     };
   } catch (error) {
     console.error('Error fetching user profile:', error);
@@ -40,25 +32,23 @@ export const getUserProfile = async (userId) => {
  */
 export const updateUserProfile = async (userId, updates) => {
   try {
-    const user = auth.currentUser;
-    if (!user || user.uid !== userId) {
+    const user = await getAuthUser();
+    if (!user || user.id !== userId) {
       return { success: false, error: 'Unauthorized' };
     }
 
-    // Prevent updating role and moderatorFor (security)
-    const allowedUpdates = {
-      displayName: updates.displayName,
-      university: updates.university,
-      photoURL: updates.photoURL,
-      updatedAt: serverTimestamp()
-    };
+    const dbUpdates = {};
+    if (updates.displayName !== undefined) dbUpdates.display_name = updates.displayName;
+    if (updates.university !== undefined) dbUpdates.university = updates.university;
+    if (updates.photoURL !== undefined) dbUpdates.photo_url = updates.photoURL;
+    if (updates.interests !== undefined) dbUpdates.interests = updates.interests;
 
-    // Remove undefined values
-    Object.keys(allowedUpdates).forEach(key => 
-      allowedUpdates[key] === undefined && delete allowedUpdates[key]
-    );
+    const { error } = await supabase
+      .from('users')
+      .update(dbUpdates)
+      .eq('id', userId);
 
-    await updateDoc(doc(db, 'users', userId), allowedUpdates);
+    if (error) throw error;
 
     return { success: true, message: 'Profile updated successfully' };
   } catch (error) {
@@ -72,38 +62,33 @@ export const updateUserProfile = async (userId, updates) => {
  */
 export const saveEvent = async (eventId, eventTitle, eventDateTime) => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated' };
     }
 
-    // Check if already saved
-    const savedEventsRef = collection(db, 'savedEvents');
-    const q = query(
-      savedEventsRef,
-      where('userId', '==', user.uid),
-      where('eventId', '==', eventId)
-    );
-    const existingSnapshot = await getDocs(q);
+    const { data: existing } = await supabase
+      .from('saved_events')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('event_id', eventId)
+      .maybeSingle();
 
-    if (!existingSnapshot.empty) {
+    if (existing) {
       return { success: false, error: 'Event already saved' };
     }
 
-    // Convert JS Date to Firestore Timestamp if needed
-    const timestamp = eventDateTime instanceof Date 
-      ? Timestamp.fromDate(eventDateTime) 
-      : eventDateTime;
-
-    // Save event
-    await addDoc(savedEventsRef, {
-      userId: user.uid,
-      eventId: eventId,
-      eventTitle: eventTitle,
-      eventDateTime: timestamp,
-      reminderSent: false,
-      createdAt: serverTimestamp()
+    const { error } = await supabase.from('saved_events').insert({
+      user_id: user.id,
+      event_id: eventId,
+      event_title: eventTitle,
+      event_date_time: eventDateTime instanceof Date
+        ? eventDateTime.toISOString()
+        : eventDateTime || null,
+      reminder_sent: false,
     });
+
+    if (error) throw error;
 
     return { success: true, message: 'Event saved successfully' };
   } catch (error) {
@@ -117,26 +102,18 @@ export const saveEvent = async (eventId, eventTitle, eventDateTime) => {
  */
 export const unsaveEvent = async (eventId) => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated' };
     }
 
-    // Find saved event
-    const savedEventsRef = collection(db, 'savedEvents');
-    const q = query(
-      savedEventsRef,
-      where('userId', '==', user.uid),
-      where('eventId', '==', eventId)
-    );
-    const querySnapshot = await getDocs(q);
+    const { error } = await supabase
+      .from('saved_events')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('event_id', eventId);
 
-    if (querySnapshot.empty) {
-      return { success: false, error: 'Event not found in saved events' };
-    }
-
-    // Delete saved event
-    await deleteDoc(querySnapshot.docs[0].ref);
+    if (error) throw error;
 
     return { success: true, message: 'Event removed from saved events' };
   } catch (error) {
@@ -150,29 +127,42 @@ export const unsaveEvent = async (eventId) => {
  */
 export const getSavedEvents = async () => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated', savedEvents: [] };
     }
 
-    const savedEventsRef = collection(db, 'savedEvents');
-    const q = query(
-      savedEventsRef,
-      where('userId', '==', user.uid)
-    );
-    const querySnapshot = await getDocs(q);
+    const { data, error } = await supabase
+      .from('saved_events')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('event_date_time', { ascending: true });
 
-    const savedEvents = [];
-    querySnapshot.forEach((doc) => {
-      savedEvents.push({
-        id: doc.id,
-        ...doc.data(),
-        eventDateTime: doc.data().eventDateTime?.toDate()
-      });
+    if (error) throw error;
+
+    // Fetch fresh event titles from events table to avoid stale denormalized data
+    const eventIds = [...new Set((data || []).map(s => s.event_id).filter(Boolean))];
+    let eventTitles = {};
+    if (eventIds.length > 0) {
+      const { data: events } = await supabase
+        .from('events')
+        .select('id, title, date_time')
+        .in('id', eventIds);
+      if (events) {
+        events.forEach(e => {
+          eventTitles[e.id] = { title: e.title, dateTime: e.date_time ? new Date(e.date_time) : null };
+        });
+      }
+    }
+
+    const savedEvents = (data || []).map((s) => {
+      const fresh = eventTitles[s.event_id] || {};
+      return {
+        ...s,
+        event_title: fresh.title || s.event_title || 'Untitled Event',
+        eventDateTime: fresh.dateTime || (s.event_date_time ? new Date(s.event_date_time) : null),
+      };
     });
-
-    // Sort by event date
-    savedEvents.sort((a, b) => a.eventDateTime - b.eventDateTime);
 
     return { success: true, savedEvents };
   } catch (error) {
@@ -186,20 +176,19 @@ export const getSavedEvents = async () => {
  */
 export const isEventSaved = async (eventId) => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: true, isSaved: false };
     }
 
-    const savedEventsRef = collection(db, 'savedEvents');
-    const q = query(
-      savedEventsRef,
-      where('userId', '==', user.uid),
-      where('eventId', '==', eventId)
-    );
-    const querySnapshot = await getDocs(q);
+    const { data } = await supabase
+      .from('saved_events')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('event_id', eventId)
+      .maybeSingle();
 
-    return { success: true, isSaved: !querySnapshot.empty };
+    return { success: true, isSaved: !!data };
   } catch (error) {
     console.error('Error checking if event is saved:', error);
     return { success: false, error: error.message, isSaved: false };
@@ -207,39 +196,126 @@ export const isEventSaved = async (eventId) => {
 };
 
 /**
- * Get upcoming saved events (for reminders)
+ * Get total save/wishlist count for an event
  */
+export const getSaveCount = async (eventId) => {
+  try {
+    const { count, error } = await supabase
+      .from('saved_events')
+      .select('*', { count: 'exact', head: true })
+      .eq('event_id', eventId);
+
+    if (error) throw error;
+    return { success: true, count: count || 0 };
+  } catch (error) {
+    console.error('Error getting save count:', error);
+    return { success: false, error: error.message, count: 0 };
+  }
+};
 export const getUpcomingSavedEvents = async () => {
   try {
-    const user = auth.currentUser;
+    const user = await getAuthUser();
     if (!user) {
       return { success: false, error: 'Not authenticated', savedEvents: [] };
     }
 
-    const now = Timestamp.now();
-    const savedEventsRef = collection(db, 'savedEvents');
-    const q = query(
-      savedEventsRef,
-      where('userId', '==', user.uid),
-      where('eventDateTime', '>', now)
-    );
-    const querySnapshot = await getDocs(q);
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('saved_events')
+      .select('*')
+      .eq('user_id', user.id)
+      .gt('event_date_time', now)
+      .order('event_date_time', { ascending: true });
 
-    const savedEvents = [];
-    querySnapshot.forEach((doc) => {
-      savedEvents.push({
-        id: doc.id,
-        ...doc.data(),
-        eventDateTime: doc.data().eventDateTime?.toDate()
-      });
-    });
+    if (error) throw error;
 
-    // Sort by event date (soonest first)
-    savedEvents.sort((a, b) => a.eventDateTime - b.eventDateTime);
+    const savedEvents = (data || []).map((s) => ({
+      ...s,
+      eventDateTime: s.event_date_time ? new Date(s.event_date_time) : null,
+    }));
 
     return { success: true, savedEvents };
   } catch (error) {
     console.error('Error fetching upcoming saved events:', error);
     return { success: false, error: error.message, savedEvents: [] };
+  }
+};
+
+/**
+ * Update user profile by an admin (allows updating role and moderatorFor)
+ */
+export const adminUpdateUserProfile = async (userId, updates) => {
+  try {
+    const user = await getAuthUser();
+    if (!user) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    const { data: currentUserProfile } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!currentUserProfile || currentUserProfile.role !== 'admin') {
+      return { success: false, error: 'Unauthorized: Only admins can perform this action' };
+    }
+
+    const dbUpdates = {};
+    if (updates.role !== undefined) dbUpdates.role = updates.role;
+    if (updates.moderatorFor !== undefined) dbUpdates.moderator_for = updates.moderatorFor;
+
+    const { error } = await supabase
+      .from('users')
+      .update(dbUpdates)
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    return { success: true, message: 'User updated successfully by Admin' };
+  } catch (error) {
+    console.error('Error updating user as admin:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Fetch all users (for Admin Dashboard)
+ */
+export const getAllUsers = async () => {
+  try {
+    const user = await getAuthUser();
+    if (!user) {
+      return { success: false, error: 'Not authenticated', users: [] };
+    }
+
+    const { data: currentUserProfile } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!currentUserProfile || currentUserProfile.role !== 'admin') {
+      return { success: false, error: 'Unauthorized', users: [] };
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('*');
+
+    if (error) throw error;
+
+    const users = (data || []).map((u) => ({
+      ...u,
+      id: u.id,
+      displayName: u.display_name || '',
+      photoURL: u.photo_url || '',
+      moderatorFor: u.moderator_for || [],
+    }));
+
+    return { success: true, users };
+  } catch (error) {
+    console.error('Error fetching all users:', error);
+    return { success: false, error: error.message, users: [] };
   }
 };
