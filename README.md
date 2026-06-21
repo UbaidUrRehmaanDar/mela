@@ -15,41 +15,36 @@ MELA connects students with academic, professional, cultural, and extracurricula
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        BROWSER (React SPA)                           │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  PAGES (23 Route Components)                                 │   │
-│  │  Landing │ EventFeed │ Details │ Login │ Profile │ Submit    │   │
-│  │  Dashboard │ Admin │ Apply │ Settings │ About │ Help ...    │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                            │                                         │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  SERVICES (9 API Wrappers)                                   │   │
-│  │  auth │ event │ submission │ moderator │ user │ application  │   │
-│  │  comment │ like │ registration                                │   │
-│  └──────────────────────┬───────────────────────────────────────┘   │
-│                         │                                           │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  CONTEXT & COMPONENTS                                       │   │
-│  │  AuthContext │ ProtectedRoute │ UI Kit (15 components)       │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-└──────────────────────────┬───────────────────────────────────────────┘
-                           │ HTTPS
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                    SUPABASE (Backend — Serverless)                    │
-│                                                                      │
-│  ┌────────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
-│  │  AUTH              │  │  STORAGE         │  │  POSTGRES DB     │  │
-│  │  Email/Password    │  │  Event Posters   │  │  8 Tables        │  │
-│  │  Session Mgmt      │  │  Documents       │  │  RLS Policies    │  │
-│  │  JWT Tokens        │  │  Public Bucket   │  │  RPC Functions   │  │
-│  └────────────────────┘  └──────────────────┘  │  Triggers        │  │
-│                                                  └─────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Client["Browser — React SPA"]
+        P[Pages<br/>23 Route Components]
+        S[Services<br/>9 API Modules]
+        C[Context & Components<br/>AuthContext · ProtectedRoute · UI Kit]
+        P --> S --> C
+    end
+
+    subgraph Backend["Supabase — Serverless Backend"]
+        A[Auth<br/>Email/Password · JWT · Sessions]
+        ST[Storage<br/>Event Posters · Documents]
+        DB[(PostgreSQL<br/>8 Tables · RLS · RPC · Triggers)]
+    end
+
+    subgraph Tables["Database Tables"]
+        T1[users]
+        T2[events]
+        T3[submissions]
+        T4[saved_events]
+        T5[organizer_applications]
+        T6[comments]
+        T7[likes]
+        T8[registrations]
+    end
+
+    Client -->|HTTPS| A
+    Client -->|HTTPS| ST
+    Client -->|HTTPS| DB
+    DB --> T1 & T2 & T3 & T4 & T5 & T6 & T7 & T8
 ```
 
 ## User Roles
