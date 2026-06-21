@@ -558,9 +558,10 @@ h4 { font-size: 20px; line-height: 1.2; }
   line-height: 1;
 }
 .badge-tech { background: var(--cyan); }
-.badge-sports { background: var(--orange); }
-.badge-arts { background: var(--blue); }
-.badge-business { background: var(--green); }
+.badge-business { background: var(--yellow); }
+.badge-arts { background: var(--pink); color: var(--white); }
+.badge-sports { background: var(--blue); }
+.badge-science { background: var(--green); }
 .badge-other { background: var(--gray-100); }
 .badge-verified { background: var(--blue) !important; color: var(--black) !important; }
 .badge-registered { background: var(--green) !important; color: var(--black) !important; }

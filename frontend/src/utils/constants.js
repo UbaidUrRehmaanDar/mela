@@ -105,10 +105,10 @@ export const INTEREST_CATEGORIES = [
 
 const CATEGORY_BADGE_MAP = {
   Tech: 'badge-tech',
-  Workshop: 'badge-sports',
+  Workshop: 'badge-tech',
   Seminar: 'badge-tech',
   Hackathon: 'badge-arts',
-  Meetup: 'badge-sports',
+  Meetup: 'badge-business',
   Conference: 'badge-business',
   Competition: 'badge-arts',
   Other: 'badge-other',

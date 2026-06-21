@@ -29,13 +29,14 @@ export const registerForEvent = async (event) => {
       .eq('id', user.id)
       .single();
 
-    if (event.participantLimit) {
+    const limit = event.participant_limit ?? event.participantLimit;
+    if (limit) {
       const { count } = await supabase
         .from('registrations')
         .select('*', { count: 'exact', head: true })
         .eq('event_id', event.id);
 
-      if (count !== null && count >= event.participantLimit) {
+      if (count !== null && count >= limit) {
         return { success: false, error: 'Event registration is full.' };
       }
     }

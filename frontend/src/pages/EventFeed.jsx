@@ -139,10 +139,9 @@ export default function EventFeed() {
     if (result.success) {
       setAllEvents(result.events);
       setPage(1);
-      paginate(result.events, 1);
     }
     setLoading(false);
-  }, [filters, paginate]);
+  }, [filters]);
 
   useEffect(() => {
     fetchEvents();

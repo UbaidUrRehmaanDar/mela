@@ -361,6 +361,30 @@ CREATE INDEX idx_registrations_event ON registrations(event_id);
 CREATE INDEX idx_registrations_user ON registrations(user_id);
 
 -- ============================================================================
+-- HELPER: prevent over-registration (race-condition safe)
+-- ============================================================================
+CREATE OR REPLACE FUNCTION check_registration_limit()
+RETURNS TRIGGER AS $$
+DECLARE
+  max_participants INTEGER;
+  current_count INTEGER;
+BEGIN
+  SELECT participant_limit INTO max_participants FROM events WHERE id = NEW.event_id;
+  IF max_participants IS NOT NULL AND max_participants > 0 THEN
+    SELECT COUNT(*) INTO current_count FROM registrations WHERE event_id = NEW.event_id;
+    IF current_count >= max_participants THEN
+      RAISE EXCEPTION 'Event registration is full (max %)', max_participants;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_registration_limit_trigger
+  BEFORE INSERT ON registrations
+  FOR EACH ROW EXECUTE FUNCTION check_registration_limit();
+
+-- ============================================================================
 -- HELPER: approve_event function (replaces Firestore batch write)
 -- ============================================================================
 CREATE OR REPLACE FUNCTION approve_event(submission_id UUID, approver_id UUID)
@@ -374,7 +398,7 @@ BEGIN
     RAISE EXCEPTION 'Submission not found';
   END IF;
 
-  -- Verify moderator/advisor status
+  -- Verify moderator/advisor status (uses university column to match RLS policies)
   IF NOT EXISTS (
     SELECT 1 FROM users
     WHERE id = approver_id
@@ -383,12 +407,12 @@ BEGIN
     RAISE EXCEPTION 'Not authorized to approve events for this university';
   END IF;
 
-  -- Insert into events
+  -- Insert into events (includes participant_limit from submission)
   INSERT INTO events (title, description, date_time, university, category, venue, poster_url, event_url,
-                      organizer_email, organizer_id, approved, approved_by, approved_at, created_at, updated_at)
+                      organizer_email, organizer_id, participant_limit, approved, approved_by, approved_at, created_at, updated_at)
   VALUES (sub.title, sub.description, sub.date_time, sub.university, sub.category, sub.venue,
           sub.poster_url, sub.event_url, sub.organizer_email, sub.organizer_id,
-          true, approver_id, NOW(), NOW(), NOW());
+          sub.participant_limit, true, approver_id, NOW(), NOW(), NOW());
 
   -- Delete the submission
   DELETE FROM submissions WHERE id = submission_id;

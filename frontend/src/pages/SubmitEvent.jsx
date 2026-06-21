@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Upload, CheckCircle, AlertCircle, ShieldCheck, GraduationCap } from 'lucide-react';
-import { submitEvent, getCurrentUser } from '../services';
+import { submitEvent } from '../services';
 import { validateEventData, isValidImageFile, isFileSizeValid, EVENT_UNIVERSITIES, CATEGORIES, USER_ROLES } from '../utils/constants';
 import { useAuth } from '../context/AuthContext';
 import Input from '../components/ui/Input';
@@ -12,7 +12,7 @@ const CAN_SUBMIT_ROLES = [USER_ROLES.ADVISOR, USER_ROLES.MODERATOR, USER_ROLES.A
 const EMPTY_FORM = { title: '', description: '', dateTime: '', university: '', category: '', venue: '', eventURL: '' };
 
 export default function SubmitEvent() {
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [posterFile, setPosterFile] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -97,7 +97,6 @@ export default function SubmitEvent() {
     submittingRef.current = true;
 
     try {
-      const user = getCurrentUser();
       if (!user) {
         setMessage('You must be logged in to submit events');
         setMessageType('error');
@@ -114,7 +113,15 @@ export default function SubmitEvent() {
       setSubmitting(true);
       setMessage('');
 
-      const result = await submitEvent({ ...formData, dateTime: new Date(formData.dateTime) }, posterFile);
+      // Wrap in a timeout so a hanging Supabase call surfaces as an error
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out — check your Supabase connection or RLS policies on the submissions table')), 12000)
+      );
+
+      const result = await Promise.race([
+        submitEvent({ ...formData, dateTime: new Date(formData.dateTime) }, posterFile),
+        timeoutPromise,
+      ]);
 
       if (!mountedRef.current) return;
 
@@ -125,12 +132,13 @@ export default function SubmitEvent() {
         setPosterFile(null);
         setTimeout(() => navigate('/my-events'), 2000);
       } else {
-        setMessage(result.error);
+        setMessage(result.error || 'Submission failed — unknown error');
         setMessageType('error');
       }
     } catch (err) {
+      console.error('Submit error:', err);
       if (mountedRef.current) {
-        setMessage(err.message);
+        setMessage(err.message || 'Something went wrong');
         setMessageType('error');
       }
     } finally {

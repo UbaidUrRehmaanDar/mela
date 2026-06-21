@@ -66,11 +66,13 @@ export default function Login() {
       }
 
       if (result.success) {
-        navigate('/events');
-      } else if (result.error?.includes('check your email') || result.error?.includes('confirm')) {
-        setNeedsConfirmation(true);
-        setConfirmEmail(formData.email);
-        setSuccessMsg(result.error);
+        if (result.needsConfirmation) {
+          setNeedsConfirmation(true);
+          setConfirmEmail(formData.email);
+          setSuccessMsg(result.message);
+        } else {
+          navigate('/events');
+        }
       } else {
         setError(result.error);
       }

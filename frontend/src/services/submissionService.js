@@ -28,13 +28,20 @@ export const submitEvent = async (eventData, posterFile) => {
       status: 'pending',
     };
 
+    console.log('Inserting submission:', submissionData);
+
     const { data: inserted, error } = await supabase
       .from('submissions')
       .insert(submissionData)
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase insert error:', error);
+      throw error;
+    }
+
+    console.log('Submission inserted:', inserted?.id);
 
     const submissionId = inserted.id;
 
@@ -154,9 +161,7 @@ export const updateSubmission = async (submissionId, updates, newPosterFile) => 
     }
 
     if (newPosterFile) {
-      const posterURL = await uploadEventPoster(submissionId, newPosterFile);
-      updates.poster_url = posterURL;
-      updates.posterURL = posterURL;
+      updates.poster_url = await uploadEventPoster(submissionId, newPosterFile);
     }
 
     const dbUpdates = {};
@@ -171,9 +176,7 @@ export const updateSubmission = async (submissionId, updates, newPosterFile) => 
     if (updates.category !== undefined) dbUpdates.category = updates.category;
     if (updates.venue !== undefined) dbUpdates.venue = updates.venue;
     if (updates.eventURL !== undefined) dbUpdates.event_url = updates.eventURL;
-    if (updates.poster_url || updates.posterURL) {
-      dbUpdates.poster_url = updates.poster_url || updates.posterURL;
-    }
+    if (updates.poster_url !== undefined) dbUpdates.poster_url = updates.poster_url;
 
     const { error: updateError } = await supabase
       .from('submissions')

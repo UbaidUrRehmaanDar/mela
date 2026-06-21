@@ -212,15 +212,16 @@ export const editEvent = async (eventId, updates) => {
  */
 export const getModeratedEvents = async (universities) => {
   try {
-    if (!universities || universities.length === 0) {
-      return { success: true, events: [] };
-    }
-
-    const { data, error } = await supabase
+    let query = supabase
       .from('events')
       .select('*')
-      .in('university', universities)
       .order('date_time', { ascending: false });
+
+    if (universities && universities.length > 0) {
+      query = query.in('university', universities);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
 

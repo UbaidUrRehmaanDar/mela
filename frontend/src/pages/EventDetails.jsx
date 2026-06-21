@@ -11,9 +11,9 @@ import {
   getComments, addComment, deleteComment,
   getLikeCount, hasLikedEvent, likeEvent, unlikeEvent,
   isRegisteredForEvent, registerForEvent, unregisterFromEvent,
-  getEventRegistrations,
   getSaveCount,
 } from '../services';
+import { supabase } from '../config/supabase';
 import { useAuth } from '../context/AuthContext';
 import { formatEventDate } from '../utils/constants';
 import Badge from '../components/ui/Badge';
@@ -69,9 +69,12 @@ export default function EventDetail() {
 
       setLoading(false);
 
-      // User-specific data
-      const regsRes = await getEventRegistrations(id);
-      if (alive && regsRes.success) setRegCount(regsRes.registrations.length);
+      // Registration count (public — uses count query, not RLS-dependent)
+      const { count } = await supabase
+        .from('registrations')
+        .select('*', { count: 'exact', head: true })
+        .eq('event_id', id);
+      if (alive) setRegCount(count || 0);
 
       if (currentUser) {
         const [savedRes, regRes, likedRes] = await Promise.all([
@@ -302,33 +305,24 @@ export default function EventDetail() {
           )}
 
           <div className="event-detail-actions">
-            {/* Register — hidden for admin/moderator */}
-            {!isAdminOrMod && (
-              <Button
-                variant={isRegistered ? 'success' : 'primary'}
-                onClick={handleRegisterToggle}
-                disabled={isFull && !isRegistered}
-                style={{ flex: 2, minWidth: '200px' }}
-              >
-                <CalendarCheck2 size={18} aria-hidden="true" />
-                {isRegistered ? 'Registered ✓' : 'Register Now'}
-              </Button>
-            )}
+            <Button
+              variant={isRegistered ? 'success' : 'primary'}
+              onClick={handleRegisterToggle}
+              disabled={isFull && !isRegistered}
+              style={{ flex: 2, minWidth: '200px' }}
+            >
+              <CalendarCheck2 size={18} aria-hidden="true" />
+              {isRegistered ? 'Registered ✓' : 'Register Now'}
+            </Button>
 
-            {/* Save — hidden for admin/moderator */}
-            {!isAdminOrMod && (
-              <IconButton onClick={handleSaveToggle} disabled={actionLoading}
-                wishlist={isSaved} aria-label={isSaved ? 'Remove from wishlist' : 'Add to wishlist'}>
-                {isSaved ? <BookmarkCheck size={22} /> : <Bookmark size={22} />}
-              </IconButton>
-            )}
+            <IconButton onClick={handleSaveToggle} disabled={actionLoading}
+              wishlist={isSaved} aria-label={isSaved ? 'Remove from wishlist' : 'Add to wishlist'}>
+              {isSaved ? <BookmarkCheck size={22} /> : <Bookmark size={22} />}
+            </IconButton>
 
-            {/* Like — hidden for admin/moderator */}
-            {!isAdminOrMod && (
-              <IconButton onClick={handleLikeToggle} active={hasLiked} aria-label="Like event">
-                <ThumbsUp size={22} fill={hasLiked ? 'currentColor' : 'none'} />
-              </IconButton>
-            )}
+            <IconButton onClick={handleLikeToggle} active={hasLiked} aria-label="Like event">
+              <ThumbsUp size={22} fill={hasLiked ? 'currentColor' : 'none'} />
+            </IconButton>
 
             <IconButton onClick={handleShare} aria-label="Share event">
               <Share2 size={22} />
@@ -375,7 +369,7 @@ export default function EventDetail() {
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
                         <span className="comment-author">{comment.displayName}</span>
                         <span className="comment-time">
-                          {comment.createdAt ? new Date(comment.createdAt).toLocaleDateString() : 'Just now'}
+                          {comment.createdAt ? comment.createdAt.toLocaleDateString() : 'Just now'}
                         </span>
                       </div>
                       <p className="comment-text">{comment.content}</p>

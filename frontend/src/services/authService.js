@@ -35,12 +35,12 @@ export const signUp = async (email, password, displayName, university) => {
     if (error) throw error;
 
     const user = data.user;
-    _currentUser = user;
 
     if (!data.session) {
       return {
-        success: false,
-        error: 'Please check your email to confirm your account before signing in.',
+        success: true,
+        needsConfirmation: true,
+        message: 'Please check your email to confirm your account before signing in.',
       };
     }
 
@@ -79,7 +79,6 @@ export const signIn = async (email, password) => {
 
     if (error) throw error;
 
-    _currentUser = data.user;
     cleanProfileCache();
 
     await ensureUserProfile(data.user);
@@ -131,12 +130,10 @@ export const logOut = async () => {
   try {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
-    _currentUser = null;
     cleanProfileCache();
     return { success: true };
   } catch (error) {
     console.error('Sign out error:', error);
-    _currentUser = null;
     cleanProfileCache();
     return { success: false, error: error.message };
   }
@@ -156,36 +153,20 @@ export const onAuthChange = (callback) => {
 };
 
 /**
- * Get current user (synchronous, from cache)
- */
-export const getCurrentUser = () => {
-  return _currentUser;
-};
-
-/**
  * Get current user reliably (async, from Supabase)
  * Use this in service functions that need a guaranteed user ID
  */
 export const getAuthUser = async () => {
   try {
     const { data: { user } } = await supabase.auth.getUser();
-    if (user) _currentUser = user;
     return user;
   } catch {
-    return _currentUser;
+    return null;
   }
 };
 
-let _currentUser = null;
 let _currentProfileCache = null;
 let _profileFetchInFlight = null;
-
-// Eagerly initialize from existing session
-supabase.auth.getSession().then(({ data: { session } }) => {
-  _currentUser = session?.user ?? null;
-}).catch(() => {
-  _currentUser = null;
-});
 
 /**
  * Update the current user's password
